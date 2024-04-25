@@ -54,18 +54,18 @@ pub enum ExecuteMsg<T, E> {
     RevokeAll { operator: String },
 
     /// Mint a new NFT, can only be called by the contract minter
-    // Mint {
-    //     /// Unique ID of the NFT
-    //     token_id: String,
-    //     /// The owner of the newly minter NFT
-    //     owner: String,
-    //     /// Universal resource identifier for this NFT
-    //     /// Should point to a JSON file that conforms to the ERC721
-    //     /// Metadata JSON Schema
-    //     token_uri: Option<String>,
-    //     /// Any custom extension used by this contract
-    //     extension: T,
-    // },
+    Mint {
+        /// Unique ID of the NFT
+        token_id: String,
+        /// The owner of the newly minter NFT
+        owner: String,
+        /// Universal resource identifier for this NFT
+        /// Should point to a JSON file that conforms to the ERC721
+        /// Metadata JSON Schema
+        token_uri: Option<String>,
+        /// Any custom extension used by this contract
+        extension: T,
+    },
 
     /// Burn an NFT the sender has access to
     Burn { token_id: String },
@@ -81,7 +81,7 @@ pub enum ExecuteMsg<T, E> {
     WithdrawFunds { amount: Coin },
     /// which is okay since withdraw address has been set by owner.
 
-    SetOwner { owner: String },
+    SetDevWallet { address: String },
 
     SetName { name: String },
 
@@ -92,12 +92,14 @@ pub enum ExecuteMsg<T, E> {
     SetMintFee { fee: u64 },
     
     SetDevFee { fee: u64 },
-    SetSupplyLimit { supply_limit: u64 },
-    
+
+    SetSupplyLimit { supply_limit: u64 },    
     
     SetSaleTime { sale_time: u64 },
 
     Buy { qty: u64, extension: T },
+
+    Reserve { qty: u64, extension: T },
 
     ToggleSaleActive {},
 }
@@ -206,6 +208,9 @@ pub enum QueryMsg<Q: JsonSchema> {
     GetMintPrice {},
 
     #[returns(u64)]
+    GetDevFee {},
+
+    #[returns(u64)]
     GetMintFee {},
 
     #[returns(u64)]
@@ -217,8 +222,8 @@ pub enum QueryMsg<Q: JsonSchema> {
     #[returns(u64)]
     GetSaleTime {},
 
-    #[returns(String)]
-    GetOwner {},
+    #[returns(u64)]
+    GetReservedAmount {},
 
     #[returns(StatesResponse)]
     GetStates {}

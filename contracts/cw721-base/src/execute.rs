@@ -32,6 +32,22 @@ where
             symbol: msg.symbol,
         };
         self.contract_info.save(deps.storage, &contract_info)?;
+        let mint_per_tx = 1u64;
+        let mint_fee = 0u64;
+        let dev_fee = 0u64;
+        let suply_limit = 100000u64;
+        let total_supply = 0u64;
+        let reserved_amount = 0u64;
+        let dev_wallet = info.clone().sender.to_string();
+        let sale_time = 0u64;
+        self.mint_per_tx.save(deps.storage, &mint_per_tx)?;
+        self.mint_fee.save(deps.storage, &mint_fee)?;
+        self.dev_fee.save(deps.storage, &dev_fee)?;
+        self.suply_limit.save(deps.storage, &suply_limit)?;
+        self.total_supply.save(deps.storage, &total_supply)?;
+        self.reserved_amount.save(deps.storage, &reserved_amount)?;
+        self.dev_wallet.save(deps.storage, &dev_wallet)?;
+        self.sale_time.save(deps.storage, &sale_time)?;
 
         let owner = match msg.minter {
             Some(owner) => deps.api.addr_validate(&owner)?,
@@ -42,7 +58,7 @@ where
         if let Some(address) = msg.withdraw_address {
             self.set_withdraw_address(deps, &owner, address)?;
         }
-
+        
         Ok(Response::default())
     }
 
@@ -54,12 +70,12 @@ where
         msg: ExecuteMsg<T, E>,
     ) -> Result<Response<C>, ContractError> {
         match msg {
-            // ExecuteMsg::Mint {
-            //     token_id,
-            //     owner,
-            //     token_uri,
-            //     extension,
-            // } => self.mint(deps, info, token_id, owner, token_uri, extension),
+            ExecuteMsg::Mint {
+                token_id,
+                owner,
+                token_uri,
+                extension,
+            } => self.mint(deps, info, token_id, 1, extension),
             ExecuteMsg::Approve {
                 spender,
                 token_id,
@@ -84,14 +100,12 @@ where
             ExecuteMsg::Burn { token_id } => self.burn(deps, env, info, token_id),
             ExecuteMsg::UpdateOwnership(action) => Self::update_ownership(deps, env, info, action),
             ExecuteMsg::Extension { msg: _ } => Ok(Response::default()),
-            ExecuteMsg::SetWithdrawAddress { address } => {
-                self.set_withdraw_address(deps, &info.sender, address)
-            }
+            ExecuteMsg::SetWithdrawAddress { address } => self.set_withdraw_address(deps, &info.sender, address),
+            ExecuteMsg::SetDevWallet { address } => self.set_dev_wallet(deps, &info.sender, address),
             ExecuteMsg::RemoveWithdrawAddress {} => {
                 self.remove_withdraw_address(deps.storage, &info.sender)
             }
             ExecuteMsg::WithdrawFunds { amount } => self.withdraw_funds(deps.storage, &amount),
-            ExecuteMsg::SetOwner { owner } => self.set_owner(deps.storage, &info.sender, &owner),
             ExecuteMsg::SetName { name } => self.set_name(deps.storage, &info.sender, &name),
             ExecuteMsg::SetSymbol { symbol } => self.set_symbol(deps.storage, &info.sender, &symbol),
             ExecuteMsg::SetMintPerTx { tx } => self.set_mint_per_tx(deps, &info.sender, &tx),
@@ -100,6 +114,7 @@ where
             ExecuteMsg::SetSupplyLimit { supply_limit } => self.set_supply_limit(deps, &info.sender, &supply_limit),
             ExecuteMsg::SetSaleTime { sale_time } => self.set_sale_time(deps, &info.sender, &sale_time),
             ExecuteMsg::Buy { qty , extension} => self.buy(deps, info, &qty, extension),
+            ExecuteMsg::Reserve { qty, extension } => self.reserve(deps, info, &qty, extension),
             ExecuteMsg::ToggleSaleActive {  } => self.toggle_sale_active(deps, &info.sender),
         }
     }
@@ -131,8 +146,9 @@ where
                 token_uri: Some(format!("https://ipfs.io/ipfs/bafybeigrytqzipxv4sekrofqfz4etp4f6c7a3bssi5oyerccmeksm4czku/{}", total_supply.clone() + i + 1)),
                 extension: extension.clone(),
             };
+            let new_token_id = format!("{} #{}", token_id.clone(), total_supply.clone() + i + 1);
             self.tokens
-            .update(deps.storage, &token_id, |old| match old {
+            .update(deps.storage, &new_token_id, |old| match old {
                 Some(_) => Err(ContractError::Claimed {}),
                 None => Ok(token),
             })?;
@@ -170,6 +186,20 @@ where
         self.withdraw_address.save(deps.storage, &address)?;
         Ok(Response::new()
             .add_attribute("action", "set_withdraw_address")
+            .add_attribute("address", address))
+    }
+
+    pub fn set_dev_wallet(
+        &self,
+        deps: DepsMut,
+        sender: &Addr,
+        address: String,
+    ) -> Result<Response<C>, ContractError> {
+        cw_ownable::assert_owner(deps.storage, sender)?;
+        deps.api.addr_validate(&address)?;
+        self.dev_wallet.save(deps.storage, &address)?;
+        Ok(Response::new()
+            .add_attribute("action", "set_dev_wallet")
             .add_attribute("address", address))
     }
 
@@ -211,21 +241,6 @@ where
             }
             None => Err(ContractError::NoWithdrawAddress {}),
         }
-    }
-
-    pub fn set_owner(
-        &self,
-        storage: &mut dyn Storage,
-        sender: &Addr,
-        owner: &String,
-    ) -> Result<Response<C>, ContractError> {
-        // self.contract_info.save(deps.storage, &contract_info)?;
-        // self
-        cw_ownable::assert_owner(storage, sender)?;
-        self.owner.save(storage, &owner)?;
-        Ok(Response::new()
-            .add_attribute("action", "set_owner")
-            .add_attribute("owner", owner))
     }
 
     pub fn set_name(
@@ -363,10 +378,12 @@ where
         }
 
         let sent_funds: u128 = info.funds.iter().find(|coin| coin.denom == "unibi").map_or(0u128, |coin| coin.amount.u128());
-        let mint_fee = self.mint_fee.may_load(deps.storage)?;
-        let dev_fee = self.dev_fee.may_load(deps.storage)?;
+        let mint_fee = self.mint_fee.may_load(deps.storage)?.unwrap_or_else(|| 0);
+        let dev_fee = self.dev_fee.may_load(deps.storage)?.unwrap_or_else(|| 0);
         let mint_per_tx = self.mint_per_tx.may_load(deps.storage)?;
-        let total_fee = mint_fee.unwrap_or_else(|| 0) + dev_fee.unwrap_or_else(|| 0);
+        let total_fee = mint_fee.clone() + dev_fee.clone();
+        let withdraw_address = self.withdraw_address.may_load(deps.storage)?.unwrap_or_else(|| info.clone().sender.into_string());
+        let dev_wallet = self.dev_wallet.may_load(deps.storage)?.unwrap_or_else(|| info.clone().sender.into_string());
 
         if sent_funds.clone() < qty.clone() as u128 * total_fee.clone() as u128 {
             return Err(ContractError::IncorrectFunds {});
@@ -379,7 +396,7 @@ where
         let remainder = qty.clone() - real_purchase.clone();
         
         let mut msg = Response::new();
-        let mint_response: Response<C> = self.mint(deps, info.clone(), "My NFT".to_string(), qty.clone(), extension.clone())?;
+        let mint_response: Response<C> = self.mint(deps, info.clone(), "jarvis".to_string(), qty.clone(), extension.clone())?;
         // msg.add_message(mint_response);
         let refund_amount = sent_funds.clone() - total_fee.clone() as u128 * remainder.clone() as u128;
         if refund_amount > 0 {
@@ -387,9 +404,47 @@ where
                 to_address: info.sender.into_string(),
                 amount: vec![coin(refund_amount, "unibi")]
             };
-            
         }
+        let mint_fee_send = BankMsg::Send {
+            to_address: withdraw_address.clone().to_string(),
+            amount: vec![coin(mint_fee.clone() as u128 * real_purchase.clone() as u128, "unibi")]
+        };
+        let dev_fee_send = BankMsg::Send {
+            to_address: dev_wallet.clone().to_string(),
+            amount: vec![coin(refund_amount, "unibi")]
+        };
+
         msg = msg.add_attribute("action", "buy");
+        Ok(msg)
+    }
+
+    pub fn reserve(
+        &self,
+        deps: DepsMut,
+        info: MessageInfo,
+        qty: &u64,
+        extension: T
+    ) -> Result<Response<C>, ContractError> {
+        cw_ownable::assert_owner(deps.storage, &info.clone().sender)?;
+
+        let mint_per_tx = self.mint_per_tx.may_load(deps.storage)?;
+
+        let supply_limit = self.suply_limit.may_load(deps.storage)?.unwrap_or_else(|| 1000u64);
+        let total_supply = self.total_supply.may_load(deps.storage)?.unwrap_or_else(|| 0u64);
+        let mut reserved_amount = self.reserved_amount.may_load(deps.storage)?.unwrap_or_else(|| 0u64);
+        let real_purchase = cmp::min(qty.clone(), supply_limit - total_supply);
+        
+        reserved_amount += real_purchase.clone();
+        self.reserved_amount.save(deps.storage, &reserved_amount)?;
+
+        let mut msg = Response::new();
+        let mint_response: Response<C> = self.mint(deps, info.clone(), "jarvis".to_string(), qty.clone(), extension.clone())?;
+        // msg.add_message(mint_response);
+        
+        msg = msg
+            .add_attribute("action", "reserve")
+            .add_attribute("new_reserved", real_purchase.clone().to_string())
+            .add_attribute("total_reserved_amount", reserved_amount.clone().to_string());
         Ok(msg)
     }
 
